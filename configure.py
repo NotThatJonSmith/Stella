@@ -23,7 +23,7 @@ class BuildEnvironment(object):
         self.linker = linker
         self.archiver = archiver
         self.copier = copier
-    
+
     @classmethod
     def from_yaml(cls, yaml_path):
 
@@ -38,11 +38,32 @@ class BuildEnvironment(object):
 
         return cls(compiler, linker, archiver, copier)
 
+    @classmethod
+    def from_platform(cls):
+
+        if sys.platform == "freebsd":
+            return cls("g++", "ld", "ar", "cp")
+
+        if sys.platform == "linux":
+            return cls("g++", "ld", "ar", "cp")
+
+        if sys.platform == "aix":
+            pass # TODO
+
+        if sys.platform == "win32":
+            pass # TODO
+
+        if sys.platform == "cygwin":
+            return cls("g++", "ld", "ar", "cp")
+
+        if sys.platform == "darwin":
+            return cls("clang++", "ld", "ar", "cp")
+
 
 class Clump(object):
 
     def __init__(self, project_name, project_path, public_header_paths,
-                 private_header_paths, sources, dependencies, products):
+                 private_header_paths, sources, dependencies, product):
         self.project_name = project_name
         self.project_path = project_path
         self.public_header_paths = public_header_paths
@@ -50,7 +71,7 @@ class Clump(object):
         self.sources = sources
         self.dependencies = dependencies
         self.includes = [project_name]
-        self.products = products
+        self.product = product
 
     @classmethod
     def from_yaml(cls, yaml_path):
@@ -68,7 +89,7 @@ class Clump(object):
             for path_piece in string_path.split('/'):
                 building_path = building_path / path_piece
             public_header_paths.append(building_path)
-        
+
         private_header_paths = []
         for string_path in clump_dict['private-header-paths']:
             building_path = project_path
@@ -84,10 +105,10 @@ class Clump(object):
 
         dependencies = clump_dict['dependencies']
 
-        products = clump_dict['products']
+        product = clump_dict['product']
 
         return cls(project_name, project_path, public_header_paths,
-                   private_header_paths, sources, dependencies, products)
+                   private_header_paths, sources, dependencies, product)
 
     def resolve_dependencies_within(self, root_path):
 
@@ -100,7 +121,7 @@ class Clump(object):
             all_clumps[m.project_name] = m
 
         while len(self.dependencies):
-            
+
             dependency = all_clumps[self.dependencies[0]]
             self.private_header_paths += dependency.private_header_paths
             self.private_header_paths += dependency.public_header_paths
@@ -108,7 +129,7 @@ class Clump(object):
             self.dependencies = [x for x in self.dependencies + dependency.dependencies if x not in self.includes and x not in dependency.includes]
             self.includes += dependency.includes # TODO uniquify
 
-    def emit_ninja(self, output, build_environment, build_path=None, products=["app"], config="release"):
+    def emit_ninja(self, output, build_environment, build_path=None, product=["app"], config="release"):
 
         if not build_path:
             build_path = pathlib.Path('.') / 'build'
@@ -151,7 +172,7 @@ class Clump(object):
         ninja.rule('link_shared', '$cxx -MD -MF $out.d $cxxflags -shared -o $out $in', depfile='$out.d')
         ninja.rule('copy_file', '$cp $in $out')
         ninja.newline()
-        
+
         ninja.comment("Build fPIC and non-fPIC objects from all the sources")
         obj_names = []
         fpic_obj_names = []
@@ -182,16 +203,16 @@ class Clump(object):
 
         ninja.comment("Copy the public header files into the build products")
         for in_tree_header_path in self.public_header_paths:
-            for in_tree_header_file in in_tree_header_path.glob('**/*'):
-                in_build_header_file = headers_path / in_tree_header_file.relative_to(self.project_path)
+            for in_tree_header_path in in_tree_header_path.glob('**/*'):
+                in_tree_header_file = str(in_tree_header_path)
+                in_build_header_file = str(headers_path / in_tree_header_path.relative_to(self.project_path))
                 ninja.build(in_build_header_file, 'copy_file', in_tree_header_file)
         ninja.newline()
 
-        if "app" in self.products:
+        if self.product == "app":
             ninja.default(executable_name)
-        elif "staticlib" in self.products:
+        elif self.product == "library":
             ninja.default(static_lib_name)
-        elif "sharedlib" in self.products:
             ninja.default(shared_lib_name)
 
 
@@ -199,16 +220,27 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Generate ninja.build')
     parser.add_argument('target', metavar='TARGET', type=str,
-                        help='The final build target')
+        help='The final build target (the name of some clump)')
     parser.add_argument('config', metavar='CONFIG', type=str,
-                        help='The build configuration, either "release" or "debug"')
+        help='The build configuration, either "release" or "debug"')
+    parser.add_argument('--env', metavar='ENV_YAML', type=str,
+        help='Override the platform-default build environment YAML blob')
+    parser.add_argument('--method', metavar='METHOD', type=str,
+        help='Override incremental build with "monolithic" or "1TU" builds')
     args = parser.parse_args()
 
     if args.config not in ['release', 'debug']:
         print("Config must be either release or debug")
+        sys.exit(1)
 
     root_path = pathlib.Path('.')
-    build_environment = BuildEnvironment.from_yaml(root_path / 'build-environment.yaml')
+
+    if args.env:
+        build_environment = BuildEnvironment.from_yaml(root_path / args.env)
+    else:
+        build_environment = BuildEnvironment.from_platform()
+    print(build_environment.compiler)
+
     clump = Clump.from_yaml(root_path / 'clump.yaml')
     clump.resolve_dependencies_within(root_path)
     with open(root_path / 'build.ninja', 'w') as ninja_file:
