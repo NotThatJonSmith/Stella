@@ -9,7 +9,10 @@ import pathlib
 
 sourcedir = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(sourcedir, 'ninja', 'misc'))
-import ninja_syntax
+try:
+    import ninja_syntax
+except ImportError:
+    print("Couldn't find ninja syntax, have you cloned and bootstrapped ninja?")
 
 # TODO bootstrap ninja if we need to
 # TODO add a monolithic build (all sources in one compile command)
