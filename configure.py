@@ -134,6 +134,12 @@ while len(remaining_dependencies):
     if dep_clump_yaml_path.exists():
         dep = Clump.from_yaml(dep_clump_yaml_path)
     # TODO what if dep is None now?
+    if dep is None:
+        print('\t 💣 Since cloned dependency "{}" does not have a clumps.yaml '\
+              'file, you need the key "clump" in the dependency to map to an '\
+              'inline clump.yaml object, so we know what to do with those files'
+              .format(dep_dict['name']))
+        sys.exit(1)
     if dep.project_name in inventory:
         print('\t ✅ Already covered {}'.format(dep.project_name))
         continue
