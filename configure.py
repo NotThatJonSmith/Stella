@@ -1,250 +1,201 @@
 #!/usr/bin/env python3
 
+# TODO add a monolithic build (all sources in one compile command)
+# TODO add a 1TU build (generated source file that includes all others)
+# TODO platform-specific flags and suffixes for making shared objects
+
 import sys
 import os
 import argparse
 
 import yaml
 import pathlib
+import git
+
+import ninja_syntax
+
 
 sourcedir = os.path.dirname(os.path.realpath(__file__))
-sys.path.insert(0, os.path.join(sourcedir, 'ninja', 'misc'))
-try:
-    import ninja_syntax
-except ImportError:
-    print("Couldn't find ninja syntax, have you cloned and bootstrapped ninja?")
-
-# TODO bootstrap ninja if we need to
-# TODO add a monolithic build (all sources in one compile command)
-# TODO add a 1TU build (generated source file that includes all others)
-# TODO platform-specific flags and suffixes for making shared objects
-
-class BuildEnvironment(object):
-
-    def __init__(self, compiler, linker, archiver, copier):
-        self.compiler = compiler
-        self.linker = linker
-        self.archiver = archiver
-        self.copier = copier
-
-    @classmethod
-    def from_yaml(cls, yaml_path):
-
-        env_file = yaml_path.open()
-        env_dict = yaml.load(env_file, Loader=yaml.Loader)
-        env_file.close()
-
-        compiler = env_dict["compiler"]
-        linker = env_dict["linker"]
-        archiver = env_dict["archiver"]
-        copier = env_dict["copier"]
-
-        return cls(compiler, linker, archiver, copier)
-
-    @classmethod
-    def from_platform(cls):
-
-        if sys.platform == "freebsd":
-            return cls("g++", "ld", "ar", "cp")
-
-        if sys.platform == "linux":
-            return cls("g++", "ld", "ar", "cp")
-
-        if sys.platform == "aix":
-            pass # TODO
-
-        if sys.platform == "win32":
-            pass # TODO
-
-        if sys.platform == "cygwin":
-            return cls("g++", "ld", "ar", "cp")
-
-        if sys.platform == "darwin":
-            return cls("clang++", "ld", "ar", "cp")
 
 
 class Clump(object):
 
-    def __init__(self, project_name, project_path, public_header_paths,
-                 private_header_paths, sources, dependencies, product):
-        self.project_name = project_name
-        self.project_path = project_path
-        self.public_header_paths = public_header_paths
-        self.private_header_paths = private_header_paths
-        self.sources = sources
-        self.dependencies = dependencies
-        self.includes = [project_name]
-        self.product = product
+    def __init__(self, yaml_path):
 
-    @classmethod
-    def from_yaml(cls, yaml_path):
+        def path_from(path_string):
+            p = self.project_path
+            for piece in path_string.split('/'):
+                p /= piece
+            return p
 
         clump_file = yaml_path.open()
         clump_dict = yaml.load(clump_file, Loader=yaml.Loader)
         clump_file.close()
 
-        project_path = yaml_path.parents[0]
-        project_name = clump_dict['name']
-
-        public_header_paths = []
-        for string_path in clump_dict['public-header-paths']:
-            building_path = project_path
-            for path_piece in string_path.split('/'):
-                building_path = building_path / path_piece
-            public_header_paths.append(building_path)
-
-        private_header_paths = []
-        for string_path in clump_dict['private-header-paths']:
-            building_path = project_path
-            for path_piece in string_path.split('/'):
-                building_path = building_path / path_piece
-            private_header_paths.append(building_path)
-
-        sources = []
+        self.project_name = clump_dict['name']
+        self.project_path = yaml_path.parents[0]
+        self.apps = [path_from(p) for p in clump_dict['apps']]
+        self.build_static_lib = clump_dict['build-static-lib']
+        self.build_shared_lib = clump_dict['build-shared-lib']
+        self.dependencies = clump_dict['dependencies']
+        self.private_header_paths = [path_from(p) for p in clump_dict['private-header-paths']]
+        self.public_header_paths = [path_from(p) for p in clump_dict['public-header-paths']]
+        self.sources = []
         for source_glob in clump_dict['source-globs']:
-            for source_path in project_path.glob(source_glob):
-                if not source_path.is_dir():
-                    sources.append(source_path)
+            self.sources += [p for p in self.project_path.glob(source_glob) if not p.is_dir()]
+            # TODO glob might have pathsep problems on windows
 
-        dependencies = clump_dict['dependencies']
+# Parse command-line arguments
+parser = argparse.ArgumentParser(description='Generate ninja.build')
+parser.add_argument('--config', metavar='CONFIG', type=str, help='The build configuration, either "release" or "debug"')
+parser.add_argument('--env', metavar='ENV_YAML', type=str, help='Override the platform-default build environment YAML blob')
+parser.add_argument('--method', metavar='METHOD', type=str, help='Override incremental build with "monolithic" or "1TU" builds')
+args = parser.parse_args()
+if not args.config:
+    args.config = 'release'
+if args.config not in ['release', 'debug']:
+    print('Config must be either "release" or "debug"')
+    sys.exit(1)
 
-        product = clump_dict['product']
+# Understand the file system around us
+clumps_path = pathlib.Path(sourcedir)
+root_path = clumps_path.parents[0]
+clumps_path = clumps_path.relative_to(root_path)
+if pathlib.Path('.').absolute() != root_path.absolute():
+    print('Error: configure.py must be run from the root of the project directory')
+    exit(1)
+root_path = pathlib.Path('.')
 
-        return cls(project_name, project_path, public_header_paths,
-                   private_header_paths, sources, dependencies, product)
+# Define the structure of the build tree
+deps_path = clumps_path / 'deps'
+deps_path.mkdir(exist_ok=True)
+build_path = root_path / 'build'
+build_path.mkdir(exist_ok=True)
+bin_path = build_path / 'bin'
+bin_path.mkdir(exist_ok=True)
+lib_path = build_path / 'lib'
+lib_path.mkdir(exist_ok=True)
+obj_path = build_path / 'obj'
+obj_path.mkdir(exist_ok=True)
+inc_path = build_path / 'include'
+inc_path.mkdir(exist_ok=True)
 
-    def resolve_dependencies_within(self, root_path):
+clump = Clump(root_path / 'clump.yaml')
 
-        all_clumps = {}
-        for clump_file in list(root_path.glob('**/clump.yaml')):
-            print("building a clump from {}".format(clump_file))
-            m = Clump.from_yaml(clump_file)
-            if (m.project_name in all_clumps.keys()):
-                continue # TODO this is a warning condition
-            all_clumps[m.project_name] = m
+# Resolve dependencies
+inventory = [clump.project_name]
+remaining_dependencies = clump.dependencies
+while len(remaining_dependencies):
+    dep_dict = remaining_dependencies[0]
+    dep_path = deps_path / dep_dict['name']
+    dep_clump_yaml_path = deps_path / dep_name / 'clump.yaml'
+    if not dep_path.exists():
+        git.Repo.clone_from(dep_dict['url'], str(dep_path))
+    dep = Clump.from_yaml(dep_clump_yaml_path)
+    clump.apps = dep.apps
+    clump.private_header_paths += dep.private_header_paths
+    clump.private_header_paths += dep.public_header_paths
+    clump.sources += dep.sources 
+    for sub_dependency in dep.dependencies:
+        if sub_dependency.name not in inventory:
+            remaining_dependencies.append(sub_dependency)
+    inventory.append(dep.name)
 
-        while len(self.dependencies):
+# Understand the system's build tools, or accept an override
+system_default_build_environments = {
+    'freebsd': {'compiler': 'g++', 'linker': 'ld', 'archiver': 'ar', 'copier': 'cp'},
+    'linux': {'compiler': 'g++', 'linker': 'ld', 'archiver': 'ar', 'copier': 'cp'},
+    'cygwin': {'compiler': 'g++', 'linker': 'ld', 'archiver': 'ar', 'copier': 'cp'},
+    'darwin': { 'compiler': 'clang++', 'linker': 'ld', 'archiver': 'ar', 'copier': 'cp'},
+} # TODO aix, win32
+build_environment = None
+if sys.platform in system_default_build_environments.keys():
+    build_environment = system_default_build_environments[sys.platform]
+elif not args.env:
+    print('platform "{}" not known to this script, and no override build environment provided')
+    sys.exit(1)
+if args.env:
+    env_file = open(args.env)
+    build_environment = yaml.load(env_file, Loader=yaml.Loader)
+    env_file.close()
 
-            dependency = all_clumps[self.dependencies[0]]
-            self.private_header_paths += dependency.private_header_paths
-            self.private_header_paths += dependency.public_header_paths
-            self.sources += dependency.sources
-            self.dependencies = [x for x in self.dependencies + dependency.dependencies if x not in self.includes and x not in dependency.includes]
-            self.includes += dependency.includes # TODO uniquify
+ninja = ninja_syntax.Writer(open(root_path / 'build.ninja', 'w'))
+ninja.comment('Generated file - do not edit!')
+ninja.newline()
 
-    def emit_ninja(self, output, build_environment, build_path=None, product=["app"], config="release"):
+ninja.comment('Required tool locations on the build platform')
+ninja.variable('cxx', build_environment['compiler'])
+ninja.variable('ld', build_environment['linker'])
+ninja.variable('ar', build_environment['archiver'])
+ninja.variable('cp', build_environment['copier'])
+ninja.newline()
 
-        if not build_path:
-            build_path = pathlib.Path('.') / 'build'
+ninja.comment('Tool flags variables')
+compiler_flags = '-std=c++17 -Wall -Wextra -Wno-unused-parameter -Werror -pedantic'
+if args.config == 'release':
+    compiler_flags += ' -O3 -flto '
+elif args.config == 'debug':
+    compiler_flags += ' -g '
+compiler_flags += ' '.join(['-I{}'.format(x) for x in clump.public_header_paths + clump.private_header_paths])
+ninja.variable('cxxflags', compiler_flags)
+ninja.variable('arflags', '-rcs')
+ninja.newline()
 
-        bin_path = build_path / 'bin'
-        lib_path = build_path / 'lib'
-        headers_path = build_path / 'include'
-        obj_path = build_path / 'obj'
+ninja.comment('Build rule definitions')
+ninja.rule('compile_exe', '$cxx -MD -MF $out.d $cxxflags $in -o $out', depfile='$out.d')
+ninja.rule('compile_static', '$cxx -MD -MF $out.d $cxxflags -c $in -o $out', depfile='$out.d')
+ninja.rule('compile_fpic', '$cxx -MD -MF $out.d $cxxflags -c -fPIC $in -o $out', depfile='$out.d')
+ninja.rule('link_static', '$ar $arflags $out $in', depfile='$out.d')
+ninja.rule('link_shared', '$cxx -MD -MF $out.d $cxxflags -shared -o $out $in', depfile='$out.d')
+ninja.rule('copy_file', '$cp $in $out')
+ninja.newline()
 
-        ninja = ninja_syntax.Writer(output)
+ninja.comment('Build static and fPIC objects from sources, except apps')
+obj_names = []
+fpic_obj_names = []
+for this_src_path in filter(lambda s: s not in clump.apps, clump.sources):
+    this_obj_path = obj_path / this_src_path
+    this_obj_name = str(this_obj_path)+'.o'
+    obj_names.append(this_obj_name)
+    ninja.build(this_obj_name, 'compile_static', str(this_src_path))
+    this_fpic_obj_name = str(this_obj_path)+'.fPIC.o'
+    fpic_obj_names.append(this_fpic_obj_name)
+    ninja.build(this_fpic_obj_name, 'compile_fpic', str(this_src_path))
+ninja.newline()
 
-        ninja.comment('Generated file - do not edit!')
-        ninja.newline()
+ninja.comment('Build a static library from the static objects')
+static_lib_name = str(lib_path / 'lib{}.a'.format(clump.project_name))
+ninja.build(static_lib_name, 'link_static', obj_names)
+ninja.newline()
+if clump.build_static_lib:
+    ninja.default(static_lib_name)
 
-        ninja.comment('Required tool locations on the build platform')
-        ninja.variable('cxx', build_environment.compiler)
-        ninja.variable('ld', build_environment.linker)
-        ninja.variable('ar', build_environment.archiver)
-        ninja.variable('cp', build_environment.copier)
-        ninja.newline()
+ninja.comment('Build a shared library from the fPIC objects')
+shared_lib_name = str(lib_path / 'lib{}.so'.format(clump.project_name))
+ninja.build(shared_lib_name, 'link_shared', fpic_obj_names)
+ninja.newline()
+if clump.build_shared_lib:
+    ninja.default(shared_lib_name)
 
-        compiler_flags = '-std=c++17 -Wall -Wextra -Wno-unused-parameter -Werror -pedantic'
-        include_paths = " ".join(["-I{}".format(x) for x in self.public_header_paths + self.private_header_paths])
-        if config == "release":
-            compiler_flags += " -O3 -flto "
-        elif config == "debug":
-            compiler_flags += " -g "
-        compiler_flags += include_paths
+ninja.comment('Build executables for the apps')
+for app_source in clump.apps:
+    executable_name = str(bin_path / app_source.stem)
+    ninja.build(this_obj_name, 'compile_static', str(this_src_path))
+    ninja.build(executable_name, 'compile_exe', obj_names)
+    ninja.newline()
+    ninja.default(executable_name) # TODO all the apps
 
-        ninja.comment("Compiler flags")
-        ninja.variable("cxxflags", compiler_flags)
-        ninja.variable("arflags", "-rcs")
-        ninja.newline()
+ninja.comment('Copy the public header files into the build products')
+for public_header_path in clump.public_header_paths:
+    for header_file_path in public_header_path.glob('**/*'):
+        header_file_src = str(header_file_path)
+        if len(clump.public_header_paths) == 1:
+            header_file_dst = str(inc_path / header_file_path.relative_to(public_header_path))
+        else:
+            header_file_dst = str(inc_path / header_file_path.relative_to(clump.project_path))
+        ninja.build(header_file_dst, 'copy_file', header_file_src)
+        if clump.build_static_lib or clump.build_shared_lib:
+            ninja.default(header_file_dst)
+ninja.newline()
 
-        ninja.comment("Build rule definitions")
-        ninja.rule('compile_exe', '$cxx -MD -MF $out.d $cxxflags $in -o $out', depfile='$out.d')
-        ninja.rule('compile_static', '$cxx -MD -MF $out.d $cxxflags -c $in -o $out', depfile='$out.d')
-        ninja.rule('compile_fpic', '$cxx -MD -MF $out.d $cxxflags -c -fPIC $in -o $out', depfile='$out.d')
-        ninja.rule('link_static', '$ar $arflags $out $in', depfile='$out.d')
-        ninja.rule('link_shared', '$cxx -MD -MF $out.d $cxxflags -shared -o $out $in', depfile='$out.d')
-        ninja.rule('copy_file', '$cp $in $out')
-        ninja.newline()
-
-        ninja.comment("Build fPIC and non-fPIC objects from all the sources")
-        obj_names = []
-        fpic_obj_names = []
-        for this_src_path in self.sources:
-            this_obj_path = obj_path / this_src_path
-            this_obj_name = str(this_obj_path)+'.o'
-            obj_names.append(this_obj_name)
-            ninja.build(this_obj_name, 'compile_static', str(this_src_path))
-            this_fpic_obj_name = str(this_obj_path)+'.fPIC.o'
-            fpic_obj_names.append(this_fpic_obj_name)
-            ninja.build(this_fpic_obj_name, 'compile_fpic', str(this_src_path))
-        ninja.newline()
-
-        static_lib_name = str(lib_path / "lib{}.a".format(self.project_name))
-        ninja.comment("Build a static library from all the non-fPIC objects")
-        ninja.build(static_lib_name, 'link_static', obj_names)
-        ninja.newline()
-
-        executable_name = str(bin_path / self.project_name)
-        ninja.comment("Build an executable from all the non-fPIC objects")
-        ninja.build(executable_name, 'compile_exe', obj_names)
-        ninja.newline()
-
-        shared_lib_name = str(lib_path / "lib{}.so".format(self.project_name))
-        ninja.comment("Build a shared library from all the fPIC objects")
-        ninja.build(shared_lib_name, 'link_shared', fpic_obj_names)
-        ninja.newline()
-
-        ninja.comment("Copy the public header files into the build products")
-        for in_tree_header_path in self.public_header_paths:
-            for in_tree_header_path in in_tree_header_path.glob('**/*'):
-                in_tree_header_file = str(in_tree_header_path)
-                in_build_header_file = str(headers_path / in_tree_header_path.relative_to(self.project_path))
-                ninja.build(in_build_header_file, 'copy_file', in_tree_header_file)
-        ninja.newline()
-
-        if self.product == "app":
-            ninja.default(executable_name)
-        elif self.product == "library":
-            ninja.default(static_lib_name)
-            ninja.default(shared_lib_name)
-
-
-if __name__ == '__main__':
-
-    parser = argparse.ArgumentParser(description='Generate ninja.build')
-    parser.add_argument('target', metavar='TARGET', type=str,
-        help='The final build target (the name of some clump)')
-    parser.add_argument('config', metavar='CONFIG', type=str,
-        help='The build configuration, either "release" or "debug"')
-    parser.add_argument('--env', metavar='ENV_YAML', type=str,
-        help='Override the platform-default build environment YAML blob')
-    parser.add_argument('--method', metavar='METHOD', type=str,
-        help='Override incremental build with "monolithic" or "1TU" builds')
-    args = parser.parse_args()
-
-    if args.config not in ['release', 'debug']:
-        print("Config must be either release or debug")
-        sys.exit(1)
-
-    root_path = pathlib.Path('.')
-
-    if args.env:
-        build_environment = BuildEnvironment.from_yaml(root_path / args.env)
-    else:
-        build_environment = BuildEnvironment.from_platform()
-    print(build_environment.compiler)
-
-    clump = Clump.from_yaml(root_path / 'clump.yaml')
-    clump.resolve_dependencies_within(root_path)
-    with open(root_path / 'build.ninja', 'w') as ninja_file:
-        clump.emit_ninja(ninja_file, build_environment, config=args.config)
+ninja.close()
