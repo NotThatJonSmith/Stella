@@ -67,7 +67,7 @@ if pathlib.Path('.').absolute() != root_path.absolute():
 root_path = pathlib.Path('.')
 
 # Define the structure of the build tree
-deps_path = clumps_path / 'deps'
+deps_path = root_path / 'deps'
 deps_path.mkdir(exist_ok=True)
 build_path = root_path / 'build'
 build_path.mkdir(exist_ok=True)
