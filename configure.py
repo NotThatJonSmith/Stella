@@ -20,7 +20,20 @@ sourcedir = os.path.dirname(os.path.realpath(__file__))
 
 class Clump(object):
 
-    def __init__(self, yaml_path):
+    @classmethod
+    def from_yaml(cls, yaml_path):
+        clump_file = yaml_path.open()
+        clump_dict = yaml.load(clump_file, Loader=yaml.Loader)
+        clump_file.close()
+        return cls(clump_dict, yaml_path.parents[0])
+
+    def __init__(self, clump_dict, project_path, project_name=None):
+
+        self.project_name = project_name
+        if 'name' in clump_dict.keys():
+            self.project_name = clump_dict['name']
+
+        self.project_path = project_path
 
         def path_from(path_string):
             p = self.project_path
@@ -28,22 +41,36 @@ class Clump(object):
                 p /= piece
             return p
 
-        clump_file = yaml_path.open()
-        clump_dict = yaml.load(clump_file, Loader=yaml.Loader)
-        clump_file.close()
+        self.apps = []
+        if 'apps' in clump_dict.keys():
+            self.apps = [path_from(p) for p in clump_dict['apps']]
 
-        self.project_name = clump_dict['name']
-        self.project_path = yaml_path.parents[0]
-        self.apps = [path_from(p) for p in clump_dict['apps']]
-        self.build_static_lib = clump_dict['build-static-lib']
-        self.build_shared_lib = clump_dict['build-shared-lib']
-        self.dependencies = clump_dict['dependencies']
-        self.private_header_paths = [path_from(p) for p in clump_dict['private-header-paths']]
-        self.public_header_paths = [path_from(p) for p in clump_dict['public-header-paths']]
+        self.build_static_lib = False
+        if 'build-static-lib' in clump_dict.keys():
+            self.build_static_lib = clump_dict['build-static-lib']
+
+        self.build_shared_lib = False
+        if 'build-shared-lib' in clump_dict.keys():
+            self.build_shared_lib = clump_dict['build-shared-lib']
+
+        self.dependencies = []
+        if 'dependencies' in clump_dict.keys():
+            self.dependencies = clump_dict['dependencies']
+
+        self.private_header_paths = []
+        if 'private-header-paths' in clump_dict.keys():
+            self.private_header_paths = [path_from(p) for p in clump_dict['private-header-paths']]
+
+
+        self.public_header_paths = []
+        if 'public-header-paths' in clump_dict.keys():
+            self.public_header_paths = [path_from(p) for p in clump_dict['public-header-paths']]
+
         self.sources = []
-        for source_glob in clump_dict['source-globs']:
-            self.sources += [p for p in self.project_path.glob(source_glob) if not p.is_dir()]
-            # TODO glob might have pathsep problems on windows
+        if 'source-globs' in clump_dict.keys():
+            for source_glob in clump_dict['source-globs']:
+                self.sources += [p for p in self.project_path.glob(source_glob) if not p.is_dir()]
+                # TODO glob might have pathsep problems on windows
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description='Generate ninja.build')
@@ -80,25 +107,35 @@ obj_path.mkdir(exist_ok=True)
 inc_path = build_path / 'include'
 inc_path.mkdir(exist_ok=True)
 
-clump = Clump(root_path / 'clump.yaml')
+clump = Clump.from_yaml(root_path / 'clump.yaml')
 
 # Resolve dependencies
+# TODO print messages
 inventory = [clump.project_name]
 remaining_dependencies = clump.dependencies
 while len(remaining_dependencies):
     dep_dict = remaining_dependencies[0]
     remaining_dependencies = remaining_dependencies[1:]
     dep_path = deps_path / dep_dict['name']
-    dep_clump_yaml_path = dep_path / 'clump.yaml'
     if not dep_path.exists():
-        git.Repo.clone_from(dep_dict['url'], str(dep_path))
-    dep = Clump(dep_clump_yaml_path)
-    clump.apps = dep.apps
+        repo = git.Repo.clone_from(dep_dict['url'], str(dep_path))
+        # TODO
+        # if 'checkout' in dep_dict:
+        #     repo.heads[dep_dict['checkout']].checkout()
+    dep_clump_yaml_path = dep_path / 'clump.yaml'
+    dep = None
+    if 'clump' in dep_dict:
+        dep = Clump(dep_dict['clump'], dep_path, dep_dict['name'])
+    if dep_clump_yaml_path.exists():
+        dep = Clump.from_yaml(dep_clump_yaml_path)
+    # TODO what if dep is None now?
+    if dep.project_name in inventory:
+        continue
     clump.private_header_paths += dep.private_header_paths
     clump.private_header_paths += dep.public_header_paths
-    clump.sources += dep.sources 
+    clump.sources += dep.sources
     for sub_dependency in dep.dependencies:
-        if sub_dependency.name not in inventory:
+        if sub_dependency['name'] not in inventory:
             remaining_dependencies.append(sub_dependency)
     inventory.append(dep.project_name)
 
@@ -181,10 +218,9 @@ if clump.build_shared_lib:
 ninja.comment('Build executables for the apps')
 for app_source in clump.apps:
     executable_name = str(bin_path / app_source.stem)
-    ninja.build(this_obj_name, 'compile_static', str(this_src_path))
     ninja.build(executable_name, 'compile_exe', obj_names)
     ninja.newline()
-    ninja.default(executable_name) # TODO all the apps
+    ninja.default(executable_name)
 
 ninja.comment('Copy the public header files into the build products')
 for public_header_path in clump.public_header_paths:
