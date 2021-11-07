@@ -87,11 +87,12 @@ inventory = [clump.project_name]
 remaining_dependencies = clump.dependencies
 while len(remaining_dependencies):
     dep_dict = remaining_dependencies[0]
+    remaining_dependencies = remaining_dependencies[1:]
     dep_path = deps_path / dep_dict['name']
-    dep_clump_yaml_path = deps_path / dep_name / 'clump.yaml'
+    dep_clump_yaml_path = dep_path / 'clump.yaml'
     if not dep_path.exists():
         git.Repo.clone_from(dep_dict['url'], str(dep_path))
-    dep = Clump.from_yaml(dep_clump_yaml_path)
+    dep = Clump(dep_clump_yaml_path)
     clump.apps = dep.apps
     clump.private_header_paths += dep.private_header_paths
     clump.private_header_paths += dep.public_header_paths
@@ -99,7 +100,7 @@ while len(remaining_dependencies):
     for sub_dependency in dep.dependencies:
         if sub_dependency.name not in inventory:
             remaining_dependencies.append(sub_dependency)
-    inventory.append(dep.name)
+    inventory.append(dep.project_name)
 
 # Understand the system's build tools, or accept an override
 system_default_build_environments = {
