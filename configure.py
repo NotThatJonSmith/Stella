@@ -110,15 +110,20 @@ inc_path.mkdir(exist_ok=True)
 clump = Clump.from_yaml(root_path / 'clump.yaml')
 
 # Resolve dependencies
-# TODO print messages
+print(' 🎯 Resolving dependencies to build {}'.format(clump.project_name))
 inventory = [clump.project_name]
 remaining_dependencies = clump.dependencies
+for dep_dict in remaining_dependencies:
+    print('\t 🔍 Discovered dependency {}'.format(dep_dict['name']))
 while len(remaining_dependencies):
     dep_dict = remaining_dependencies[0]
     remaining_dependencies = remaining_dependencies[1:]
     dep_path = deps_path / dep_dict['name']
     if not dep_path.exists():
+        print('\t ⬇️ Cloning {}'.format(dep_dict['name']), end='\r')
         repo = git.Repo.clone_from(dep_dict['url'], str(dep_path))
+        print(end='\x1b[1K\r')
+        print('\t ✅ Cloned {}'.format(dep_dict['name']))
         # TODO
         # if 'checkout' in dep_dict:
         #     repo.heads[dep_dict['checkout']].checkout()
@@ -130,14 +135,20 @@ while len(remaining_dependencies):
         dep = Clump.from_yaml(dep_clump_yaml_path)
     # TODO what if dep is None now?
     if dep.project_name in inventory:
+        print('\t ✅ Already covered {}'.format(dep.project_name))
         continue
     clump.private_header_paths += dep.private_header_paths
     clump.private_header_paths += dep.public_header_paths
     clump.sources += dep.sources
     for sub_dependency in dep.dependencies:
+        print('\t 🔍 Discovered {}\'s dependency {}'.format(dep.project_name, sub_dependency['name']))
         if sub_dependency['name'] not in inventory:
-            remaining_dependencies.append(sub_dependency)
+            remaining_dependencies = [sub_dependency] + remaining_dependencies
+        else:
+            print('\t ✅ Already covered {}'.format(sub_dependency['name']))
     inventory.append(dep.project_name)
+
+print()
 
 # Understand the system's build tools, or accept an override
 system_default_build_environments = {
@@ -217,10 +228,13 @@ if clump.build_shared_lib:
 
 ninja.comment('Build executables for the apps')
 for app_source in clump.apps:
+    app_obj_path = obj_path / app_source
+    app_obj_name = str(app_obj_path)+'.o'
+    ninja.build(app_obj_name, 'compile_static', str(app_source))
     executable_name = str(bin_path / app_source.stem)
-    ninja.build(executable_name, 'compile_exe', obj_names)
-    ninja.newline()
+    ninja.build(executable_name, 'compile_exe', obj_names+[app_obj_name])
     ninja.default(executable_name)
+ninja.newline()
 
 ninja.comment('Copy the public header files into the build products')
 for public_header_path in clump.public_header_paths:
