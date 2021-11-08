@@ -110,48 +110,60 @@ inc_path.mkdir(exist_ok=True)
 clump = Clump.from_yaml(root_path / 'clump.yaml')
 
 # Resolve dependencies
-print(' 🎯 Resolving dependencies to build {}'.format(clump.project_name))
+print(' 🎯 Resolving dependencies to build clump {}'.format(clump.project_name))
 inventory = [clump.project_name]
 remaining_dependencies = clump.dependencies
+print('\t 📚 We already have a clone of {} - of course'.format(clump.project_name))
+print('\t 📦 {} is a clump (of course), already loaded {}'.format(clump.project_name, root_path / 'clump.yaml'))
 for dep_dict in remaining_dependencies:
-    print('\t 🔍 Discovered dependency {}'.format(dep_dict['name']))
+    print('\t 🧩 Discovered {}\'s dependency {}'.format(clump.project_name, dep_dict['name']))
+print('\t 🏁 {} acquired'.format(clump.project_name))
+
 while len(remaining_dependencies):
-    dep_dict = remaining_dependencies[0]
-    remaining_dependencies = remaining_dependencies[1:]
+
+    dep_dict = remaining_dependencies.pop(0)
     dep_path = deps_path / dep_dict['name']
-    if not dep_path.exists():
-        print('\t ⬇️ Cloning {}'.format(dep_dict['name']), end='\r')
+
+    print(' 🎯 Resolving dependency {}'.format(dep_dict['name']))
+
+    if dep_path.exists():
+        print('\t 📚 We already have a clone of {}'.format(dep_dict['name']))
+    else:
+        print('\t ⏳ Cloning {} from {} into {}'.format(dep_dict['name'], dep_dict['url'], dep_path), end='\r')
         repo = git.Repo.clone_from(dep_dict['url'], str(dep_path))
-        print(end='\x1b[1K\r')
-        print('\t ✅ Cloned {}'.format(dep_dict['name']))
+        print('\t ⌛')
         # TODO
         # if 'checkout' in dep_dict:
         #     repo.heads[dep_dict['checkout']].checkout()
+
     dep_clump_yaml_path = dep_path / 'clump.yaml'
-    dep = None
-    if 'clump' in dep_dict:
-        dep = Clump(dep_dict['clump'], dep_path, dep_dict['name'])
     if dep_clump_yaml_path.exists():
+        print('\t 📦 {} is a clump as well; loading {}'.format(dep_dict['name'], dep_clump_yaml_path))
         dep = Clump.from_yaml(dep_clump_yaml_path)
-    # TODO what if dep is None now?
-    if dep is None:
-        print('\t 💣 Since cloned dependency "{}" does not have a clumps.yaml '\
-              'file, you need the key "clump" in the dependency to map to an '\
-              'inline clump.yaml object, so we know what to do with those files'
-              .format(dep_dict['name']))
+    elif 'clump' in dep_dict:
+        print('\t 🍃 {} is not a clump; loading sub-clump from {} instead'.format(dep_dict['name'], root_path / 'clump.yaml'))
+        dep = Clump(dep_dict['clump'], dep_path, dep_dict['name'])
+    else:
+        print('\t 💣 Since cloned dependency "{}" does not have a clump.yaml file, you need the key "clump" in the '\
+              'dependency to map to an inline clump.yaml object, so we know what to do with those files'.format(dep_dict['name']))
         sys.exit(1)
+
     if dep.project_name in inventory:
         print('\t ✅ Already covered {}'.format(dep.project_name))
         continue
+
     clump.private_header_paths += dep.private_header_paths
     clump.private_header_paths += dep.public_header_paths
     clump.sources += dep.sources
+
     for sub_dependency in dep.dependencies:
-        print('\t 🔍 Discovered {}\'s dependency {}'.format(dep.project_name, sub_dependency['name']))
-        if sub_dependency['name'] not in inventory:
-            remaining_dependencies = [sub_dependency] + remaining_dependencies
+        if sub_dependency['name'] not in inventory and sub_dependency not in remaining_dependencies:
+            print('\t 🧩 Discovered {}\'s dependency {}'.format(dep.project_name, sub_dependency['name']))
+            remaining_dependencies.append(sub_dependency)
         else:
-            print('\t ✅ Already covered {}'.format(sub_dependency['name']))
+            print('\t ✅ Already covered {}\'s dependency {}'.format(dep.project_name, sub_dependency['name']))
+
+    print('\t 🏁 {} acquired'.format(dep.project_name))
     inventory.append(dep.project_name)
 
 print()
