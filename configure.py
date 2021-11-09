@@ -130,9 +130,8 @@ while len(remaining_dependencies):
     if dep_path.exists():
         print('\t 📚 We already have a clone of {}'.format(dep_dict['name']))
     else:
-        print('\t ⏳ Cloning {} from {} into {}'.format(dep_dict['name'], dep_dict['url'], dep_path), end='\r')
+        print('\t ⏳ Cloning {} from {} into {}'.format(dep_dict['name'], dep_dict['url'], dep_path))
         repo = git.Repo.clone_from(dep_dict['url'], str(dep_path))
-        print('\t ⌛')
         # TODO
         # if 'checkout' in dep_dict:
         #     repo.heads[dep_dict['checkout']].checkout()
