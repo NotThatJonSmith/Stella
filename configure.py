@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: UTF-8 -*-
 
 # TODO add a monolithic build (all sources in one compile command)
 # TODO add a 1TU build (generated source file that includes all others)
