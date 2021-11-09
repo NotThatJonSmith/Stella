@@ -132,9 +132,8 @@ while len(remaining_dependencies):
     else:
         print('\t ⏳ Cloning {} from {} into {}'.format(dep_dict['name'], dep_dict['url'], dep_path))
         repo = git.Repo.clone_from(dep_dict['url'], str(dep_path))
-        # TODO
-        # if 'checkout' in dep_dict:
-        #     repo.heads[dep_dict['checkout']].checkout()
+        if 'checkout' in dep_dict.keys():
+            repo.git.checkout(dep_dict['checkout'])
 
     dep_clump_yaml_path = dep_path / 'clump.yaml'
     if dep_clump_yaml_path.exists():
