@@ -19,20 +19,20 @@ import ninja_syntax
 sourcedir = os.path.dirname(os.path.realpath(__file__))
 
 
-class Clump(object):
+class StellaRepo(object):
 
     @classmethod
     def from_yaml(cls, yaml_path):
-        clump_file = yaml_path.open()
-        clump_dict = yaml.load(clump_file, Loader=yaml.Loader)
-        clump_file.close()
-        return cls(clump_dict, yaml_path.parents[0])
+        yaml_file = yaml_path.open()
+        yaml_dict = yaml.load(yaml_file, Loader=yaml.Loader)
+        yaml_file.close()
+        return cls(yaml_dict, yaml_path.parents[0])
 
-    def __init__(self, clump_dict, project_path, project_name=None):
+    def __init__(self, stella_yaml_dict, project_path, project_name=None):
 
         self.project_name = project_name
-        if 'name' in clump_dict.keys():
-            self.project_name = clump_dict['name']
+        if 'name' in stella_yaml_dict.keys():
+            self.project_name = stella_yaml_dict['name']
 
         self.project_path = project_path
 
@@ -43,33 +43,33 @@ class Clump(object):
             return p
 
         self.apps = []
-        if 'apps' in clump_dict.keys():
-            self.apps = [path_from(p) for p in clump_dict['apps']]
+        if 'apps' in stella_yaml_dict.keys():
+            self.apps = [path_from(p) for p in stella_yaml_dict['apps']]
 
         self.build_static_lib = False
-        if 'build-static-lib' in clump_dict.keys():
-            self.build_static_lib = clump_dict['build-static-lib']
+        if 'build-static-lib' in stella_yaml_dict.keys():
+            self.build_static_lib = stella_yaml_dict['build-static-lib']
 
         self.build_shared_lib = False
-        if 'build-shared-lib' in clump_dict.keys():
-            self.build_shared_lib = clump_dict['build-shared-lib']
+        if 'build-shared-lib' in stella_yaml_dict.keys():
+            self.build_shared_lib = stella_yaml_dict['build-shared-lib']
 
         self.dependencies = []
-        if 'dependencies' in clump_dict.keys():
-            self.dependencies = clump_dict['dependencies']
+        if 'dependencies' in stella_yaml_dict.keys():
+            self.dependencies = stella_yaml_dict['dependencies']
 
         self.private_header_paths = []
-        if 'private-header-paths' in clump_dict.keys():
-            self.private_header_paths = [path_from(p) for p in clump_dict['private-header-paths']]
+        if 'private-header-paths' in stella_yaml_dict.keys():
+            self.private_header_paths = [path_from(p) for p in stella_yaml_dict['private-header-paths']]
 
 
         self.public_header_paths = []
-        if 'public-header-paths' in clump_dict.keys():
-            self.public_header_paths = [path_from(p) for p in clump_dict['public-header-paths']]
+        if 'public-header-paths' in stella_yaml_dict.keys():
+            self.public_header_paths = [path_from(p) for p in stella_yaml_dict['public-header-paths']]
 
         self.sources = []
-        if 'source-globs' in clump_dict.keys():
-            for source_glob in clump_dict['source-globs']:
+        if 'source-globs' in stella_yaml_dict.keys():
+            for source_glob in stella_yaml_dict['source-globs']:
                 self.sources += [p for p in self.project_path.glob(source_glob) if not p.is_dir()]
                 # TODO glob might have pathsep problems on windows
 
@@ -86,9 +86,9 @@ if args.config not in ['release', 'debug']:
     sys.exit(1)
 
 # Understand the file system around us
-clumps_path = pathlib.Path(sourcedir)
-root_path = clumps_path.parents[0]
-clumps_path = clumps_path.relative_to(root_path)
+stella_path = pathlib.Path(sourcedir)
+root_path = stella_path.parents[0]
+stella_path = stella_path.relative_to(root_path)
 if pathlib.Path('.').absolute() != root_path.absolute():
     print('Error: configure.py must be run from the root of the project directory')
     exit(1)
@@ -108,17 +108,17 @@ obj_path.mkdir(exist_ok=True)
 inc_path = build_path / 'include'
 inc_path.mkdir(exist_ok=True)
 
-clump = Clump.from_yaml(root_path / 'clump.yaml')
+stella_repo = StellaRepo.from_yaml(root_path / 'stella.yaml')
 
 # Resolve dependencies
-print(' 🎯 Resolving dependencies to build clump {}'.format(clump.project_name))
-inventory = [clump.project_name]
-remaining_dependencies = clump.dependencies
-print('\t 📚 We already have a clone of {} - of course'.format(clump.project_name))
-print('\t 📦 {} is a clump (of course), already loaded {}'.format(clump.project_name, root_path / 'clump.yaml'))
+print(' 🎯 Resolving dependencies to build stella repo {}'.format(stella_repo.project_name))
+inventory = [stella_repo.project_name]
+remaining_dependencies = stella_repo.dependencies
+print('\t 📚 We already have a clone of {} - of course'.format(stella_repo.project_name))
+print('\t 📦 {} is a stella repo (of course), already loaded {}'.format(stella_repo.project_name, root_path / 'stella.yaml'))
 for dep_dict in remaining_dependencies:
-    print('\t 🧩 Discovered {}\'s dependency {}'.format(clump.project_name, dep_dict['name']))
-print('\t 🏁 {} acquired'.format(clump.project_name))
+    print('\t 🧩 Discovered {}\'s dependency {}'.format(stella_repo.project_name, dep_dict['name']))
+print('\t 🏁 {} acquired'.format(stella_repo.project_name))
 
 while len(remaining_dependencies):
 
@@ -131,29 +131,29 @@ while len(remaining_dependencies):
         print('\t 📚 We already have a clone of {}'.format(dep_dict['name']))
     else:
         print('\t ⏳ Cloning {} from {} into {}'.format(dep_dict['name'], dep_dict['url'], dep_path))
-        repo = git.Repo.clone_from(dep_dict['url'], str(dep_path))
+        git_repo = git.Repo.clone_from(dep_dict['url'], str(dep_path))
         if 'checkout' in dep_dict.keys():
-            repo.git.checkout(dep_dict['checkout'])
+            git_repo.git.checkout(dep_dict['checkout'])
 
-    dep_clump_yaml_path = dep_path / 'clump.yaml'
-    if dep_clump_yaml_path.exists():
-        print('\t 📦 {} is a clump as well; loading {}'.format(dep_dict['name'], dep_clump_yaml_path))
-        dep = Clump.from_yaml(dep_clump_yaml_path)
-    elif 'clump' in dep_dict:
-        print('\t 🍃 {} is not a clump; loading sub-clump from {} instead'.format(dep_dict['name'], root_path / 'clump.yaml'))
-        dep = Clump(dep_dict['clump'], dep_path, dep_dict['name'])
+    dep_stella_yaml_path = dep_path / 'stella.yaml'
+    if dep_stella_yaml_path.exists():
+        print('\t 📦 {} is a stella repo as well; loading {}'.format(dep_dict['name'], dep_stella_yaml_path))
+        dep = StellaRepo.from_yaml(dep_stella_yaml_path)
+    elif 'stella-yaml' in dep_dict:
+        print('\t 🍃 {} is not a stella repo; loading dependency info from within {} instead'.format(dep_dict['name'], root_path / 'stella.yaml'))
+        dep = StellaRepo(dep_dict['stella-yaml'], dep_path, dep_dict['name'])
     else:
-        print('\t 💣 Since cloned dependency "{}" does not have a clump.yaml file, you need the key "clump" in the '\
-              'dependency to map to an inline clump.yaml object, so we know what to do with those files'.format(dep_dict['name']))
+        print('\t 💣 Since cloned dependency "{}" does not have a stella.yaml file, you need the key "stella-yaml" in '\
+              'the dependency to map to an inline stella.yaml object, so we know what to do with those files'.format(dep_dict['name']))
         sys.exit(1)
 
     if dep.project_name in inventory:
         print('\t ✅ Already covered {}'.format(dep.project_name))
         continue
 
-    clump.private_header_paths += dep.private_header_paths
-    clump.private_header_paths += dep.public_header_paths
-    clump.sources += dep.sources
+    stella_repo.private_header_paths += dep.private_header_paths
+    stella_repo.private_header_paths += dep.public_header_paths
+    stella_repo.sources += dep.sources
 
     for sub_dependency in dep.dependencies:
         if sub_dependency['name'] not in inventory and sub_dependency not in remaining_dependencies:
@@ -202,7 +202,7 @@ if args.config == 'release':
     compiler_flags += ' -O3 -flto '
 elif args.config == 'debug':
     compiler_flags += ' -g '
-compiler_flags += ' '.join(['-I{}'.format(x) for x in clump.public_header_paths + clump.private_header_paths])
+compiler_flags += ' '.join(['-I{}'.format(x) for x in stella_repo.public_header_paths + stella_repo.private_header_paths])
 ninja.variable('cxxflags', compiler_flags)
 ninja.variable('arflags', '-rcs')
 ninja.newline()
@@ -219,7 +219,7 @@ ninja.newline()
 ninja.comment('Build static and fPIC objects from sources, except apps')
 obj_names = []
 fpic_obj_names = []
-for this_src_path in filter(lambda s: s not in clump.apps, clump.sources):
+for this_src_path in filter(lambda s: s not in stella_repo.apps, stella_repo.sources):
     this_obj_path = obj_path / this_src_path
     this_obj_name = str(this_obj_path)+'.o'
     obj_names.append(this_obj_name)
@@ -230,21 +230,21 @@ for this_src_path in filter(lambda s: s not in clump.apps, clump.sources):
 ninja.newline()
 
 ninja.comment('Build a static library from the static objects')
-static_lib_name = str(lib_path / 'lib{}.a'.format(clump.project_name))
+static_lib_name = str(lib_path / 'lib{}.a'.format(stella_repo.project_name))
 ninja.build(static_lib_name, 'link_static', obj_names)
 ninja.newline()
-if clump.build_static_lib:
+if stella_repo.build_static_lib:
     ninja.default(static_lib_name)
 
 ninja.comment('Build a shared library from the fPIC objects')
-shared_lib_name = str(lib_path / 'lib{}.so'.format(clump.project_name))
+shared_lib_name = str(lib_path / 'lib{}.so'.format(stella_repo.project_name))
 ninja.build(shared_lib_name, 'link_shared', fpic_obj_names)
 ninja.newline()
-if clump.build_shared_lib:
+if stella_repo.build_shared_lib:
     ninja.default(shared_lib_name)
 
 ninja.comment('Build executables for the apps')
-for app_source in clump.apps:
+for app_source in stella_repo.apps:
     app_obj_path = obj_path / app_source
     app_obj_name = str(app_obj_path)+'.o'
     ninja.build(app_obj_name, 'compile_static', str(app_source))
@@ -254,15 +254,15 @@ for app_source in clump.apps:
 ninja.newline()
 
 ninja.comment('Copy the public header files into the build products')
-for public_header_path in clump.public_header_paths:
+for public_header_path in stella_repo.public_header_paths:
     for header_file_path in public_header_path.glob('**/*'):
         header_file_src = str(header_file_path)
-        if len(clump.public_header_paths) == 1:
+        if len(stella_repo.public_header_paths) == 1:
             header_file_dst = str(inc_path / header_file_path.relative_to(public_header_path))
         else:
-            header_file_dst = str(inc_path / header_file_path.relative_to(clump.project_path))
+            header_file_dst = str(inc_path / header_file_path.relative_to(stella_repo.project_path))
         ninja.build(header_file_dst, 'copy_file', header_file_src)
-        if clump.build_static_lib or clump.build_shared_lib:
+        if stella_repo.build_static_lib or stella_repo.build_shared_lib:
             ninja.default(header_file_dst)
 ninja.newline()
 

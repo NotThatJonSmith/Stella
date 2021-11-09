@@ -1,0 +1,40 @@
+# Reusable workflow for building and testing projects that use Stella
+name: CI
+
+on:
+  workflow_call:
+
+jobs:
+
+  build:
+
+    runs-on: ${{ matrix.config.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - name: Mac OS Big Sur
+            os: macos-11
+          - name: Ubuntu
+            os: ubuntu-latest
+          - name: Windows Server
+            os: windows-latest
+
+    steps:
+
+      - uses: actions/checkout@v2
+
+      - name: Initialize submodules
+        run: git submodule update --init
+
+      - name: Bootstrap Ninja
+        run: cd ninja && python3 configure.py --bootstrap
+
+      - name: Get Clumps dependencies
+        run: pip3 install -r Clumps/requirements.txt
+
+      - name: Gather dependencies
+        run: python3 ./Clumps/configure.py
+          
+      - name: Run the ninja build
+        run: ./ninja/ninja
