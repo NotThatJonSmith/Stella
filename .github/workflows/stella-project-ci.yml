@@ -30,11 +30,11 @@ jobs:
       - name: Bootstrap Ninja
         run: cd ninja && python3 configure.py --bootstrap
 
-      - name: Get Clumps dependencies
-        run: pip3 install -r Clumps/requirements.txt
+      - name: Bootstrap Stella
+        run: pip3 install -r Stella/requirements.txt
 
-      - name: Gather dependencies
-        run: python3 ./Clumps/configure.py
+      - name: Run Stella to gather dependencies
+        run: python3 ./Stella/stella.py
           
       - name: Run the ninja build
         run: ./ninja/ninja
