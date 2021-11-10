@@ -28,7 +28,7 @@ jobs:
         run: git submodule update --init
 
       - name: Bootstrap Ninja
-        run: cd ninja && python3 configure.py --bootstrap
+        run: cd Stella/ninja && python3 configure.py --bootstrap
 
       - name: Bootstrap Stella
         run: pip3 install -r Stella/requirements.txt
@@ -37,4 +37,4 @@ jobs:
         run: python3 ./Stella/stella.py
           
       - name: Run the ninja build
-        run: ./ninja/ninja
+        run: ./Stella/ninja/ninja
