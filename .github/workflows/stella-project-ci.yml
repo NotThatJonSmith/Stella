@@ -25,12 +25,24 @@ jobs:
       - uses: actions/checkout@v2
 
       - name: Initialize submodules
-        run: git submodule update --init --recursive --remote
+        run: git submodule update --init --remote
+        
+      - name: Cache Ninja
+        id: cache-ninja
+        uses: actions/cache@v2
+        with:
+          path: ./Stella/ninja
+          key: ${{ runner.os }}-ninja
+          
+      - name: Clone Ninja
+        if: steps.cache-ninja.outputs.cache-hit != 'true'
+        run: cd Stella && git submodule update --init --remote --update
 
       - name: Bootstrap Ninja
+        if: steps.cache-ninja.outputs.cache-hit != 'true'
         run: cd Stella/ninja && python3 configure.py --bootstrap
 
-      - name: Bootstrap Stella
+      - name: Gather python packages required by Stella
         run: pip3 install -r Stella/requirements.txt
 
       - name: Run Stella to gather dependencies
