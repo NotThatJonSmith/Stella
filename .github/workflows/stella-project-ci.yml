@@ -36,7 +36,7 @@ jobs:
           
       - name: Clone Ninja
         if: steps.cache-ninja.outputs.cache-hit != 'true'
-        run: cd Stella && git submodule update --init --remote --update
+        run: cd Stella && git submodule update --init --remote
 
       - name: Bootstrap Ninja
         if: steps.cache-ninja.outputs.cache-hit != 'true'
