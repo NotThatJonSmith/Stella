@@ -279,7 +279,7 @@ if __name__ == '__main__':
     if test_path.exists():
         test_include_flags = include_flags + [' -I{} -I{}'.format(test_inc_path, gtest_inc_path)]
         test_src_path = test_path / 'src'
-        test_compile_inputs = [str(gtest_lib_path)] + [str(x) for x in test_src_path.glob('*')] + [x.object_name for x in stella_repo.sources]
+        test_compile_inputs = [str(x) for x in test_src_path.glob('*')] + [x.object_name for x in stella_repo.sources] + [str(gtest_lib_path)]
         ninja.variable('testincflags', test_include_flags)
         ninja.rule('compile_static_test', '$cxx -MD -MF $out.d $cxxflags $testincflags $in -o $out', depfile='$out.d')
         ninja.newline()
