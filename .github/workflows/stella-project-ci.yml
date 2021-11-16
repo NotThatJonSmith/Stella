@@ -56,7 +56,7 @@ jobs:
       - name: Bootstrap Googletest
         if: steps.cache-gtest.outputs.cache-hit != 'true'
         run: |
-          cd googletest && \
+          cd Stella/googletest && \
           mkdir build && \
           cd build && \
           cmake .. && \
