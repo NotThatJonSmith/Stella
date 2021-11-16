@@ -24,29 +24,52 @@ jobs:
 
       - uses: actions/checkout@v2
 
-      - name: Initialize submodules
-        run: git submodule update --init --remote
-        
+      - name: Clone Stella
+        run: git submodule update Stella --init --remote
+
       - name: Cache Ninja
         id: cache-ninja
         uses: actions/cache@v2
         with:
           path: ./Stella/ninja
           key: ${{ runner.os }}-ninja
-          
+
       - name: Clone Ninja
         if: steps.cache-ninja.outputs.cache-hit != 'true'
-        run: cd Stella && git submodule update --init --remote
+        run: cd Stella && git submodule update ninja --init --remote
 
       - name: Bootstrap Ninja
         if: steps.cache-ninja.outputs.cache-hit != 'true'
         run: cd Stella/ninja && python3 configure.py --bootstrap
+
+      - name: Cache Googletest
+        id: cache-gtest
+        uses: actions/cache@v2
+        with:
+          path: ./Stella/googletest
+          key: ${{ runner.os }}-gtest
+
+      - name: Clone Googletest
+        if: steps.cache-gtest.outputs.cache-hit != 'true'
+        run: cd Stella && git submodule update googletest --init --remote
+
+      - name: Bootstrap Googletest
+        if: steps.cache-gtest.outputs.cache-hit != 'true'
+        run: |
+          cd googletest && \
+          mkdir build && \
+          cd build && \
+          cmake .. && \
+          make
 
       - name: Gather python packages required by Stella
         run: pip3 install -r Stella/requirements.txt
 
       - name: Run Stella to gather dependencies
         run: python3 ./Stella/stella.py
-          
+
       - name: Run the ninja build
         run: ./Stella/ninja/ninja
+
+      - name: Run the tests
+        run: ./build/bin/run-tests || echo "Test binary missing"
