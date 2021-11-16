@@ -51,7 +51,7 @@ jobs:
 
       - name: Clone Googletest
         if: steps.cache-gtest.outputs.cache-hit != 'true'
-        run: cd Stella && git submodule update googletest --init --remote
+        run: cd Stella && git submodule update --init --remote googletest
 
       - name: Bootstrap Googletest
         if: steps.cache-gtest.outputs.cache-hit != 'true'
