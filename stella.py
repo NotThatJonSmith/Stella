@@ -129,6 +129,18 @@ class StellaRepo(object):
                     if not source_path.is_dir() and not source_path in self.apps:
                         self.sources.append(Source(source_path))
 
+        self.tests = []
+        if 'test-globs' in stella_yaml_dict.keys():
+            for test_glob in stella_yaml_dict['test-globs']:
+                for source_path in self.project_path.glob(test_glob):
+                    if not source_path.is_dir():
+                        self.tests.append(Source(source_path))
+
+        self.test_header_paths = []
+        if 'test-header-paths' in stella_yaml_dict.keys():
+            for header_path_string in stella_yaml_dict['test-header-paths']:
+                self.test_header_paths.append(path_from(header_path_string))
+        
     def resolve_dependencies(self):
 
         resolved_dependency_names = [self.project_name]
@@ -218,6 +230,8 @@ if __name__ == '__main__':
     elif args.config == 'debug':
         compiler_flags += ' -g '
     include_flags = ['-I{}'.format(x) for x in stella_repo.public_header_paths + stella_repo.private_header_paths]
+    test_include_flags =  ['-I{}'.format(x) for x in stella_repo.test_header_paths]
+    gtest_include_flags = ['-I{}'.format(gtest_inc_path)]
 
     static_lib_name = str(lib_path / 'lib{}.a'.format(stella_repo.project_name))
     shared_lib_name = str(lib_path / 'lib{}.so'.format(stella_repo.project_name))
@@ -276,15 +290,21 @@ if __name__ == '__main__':
                 ninja.default(header_file_dst)
     ninja.newline()
 
-    if test_path.exists():
-        test_include_flags = include_flags + [' -I{} -I{}'.format(test_inc_path, gtest_inc_path)]
-        test_src_path = test_path / 'src'
-        test_compile_inputs = [str(x) for x in test_src_path.glob('*')] + [x.object_name for x in stella_repo.sources] + [str(gtest_lib_path)]
-        ninja.variable('testincflags', test_include_flags)
-        ninja.rule('compile_static_test', '$cxx -MD -MF $out.d $cxxflags $testincflags $in -o $out', depfile='$out.d')
-        ninja.newline()
-        ninja.build(test_target, 'compile_static_test', test_compile_inputs)
+    ninja.variable('testincflags', include_flags + test_include_flags + gtest_include_flags)
+    ninja.rule('compile_static_test', '$cxx -MD -MF $out.d $cxxflags $testincflags -c $in -o $out', depfile='$out.d')
+    ninja.rule('compile_test_exe', '$cxx -MD -MF $out.d $cxxflags $testincflags $in -o $out', depfile='$out.d')
+    ninja.newline()
+
+    for source in stella_repo.tests:
+        ninja.build(source.object_name, 'compile_static_test', source.source_name)
+
+    test_src_path = test_path / 'src'
+    test_compile_inputs = [x.object_name for x in stella_repo.tests] + \
+                          [x.object_name for x in stella_repo.sources] + \
+                          [str(gtest_lib_path)]
+    ninja.build(test_target, 'compile_test_exe', test_compile_inputs)
+    if len(stella_repo.tests):
         ninja.default(test_target)
-        ninja.newline()
+    ninja.newline()
 
     ninja.close()
