@@ -35,7 +35,7 @@ inc_path.mkdir(exist_ok=True)
 test_path = root_path / 'test'
 test_inc_path = test_path / 'include'
 gtest_inc_path = stella_path / 'googletest' / 'googletest' / 'include'
-gtest_lib_path = stella_path / 'googletest' / 'build' / 'lib' / 'libgtest.a'
+gtest_lib_path = stella_path / 'googletest' / 'build' / 'lib'
 test_target = str(bin_path / "run-tests")
 
 def get_build_environment(env_override=None):
@@ -291,8 +291,9 @@ if __name__ == '__main__':
     ninja.newline()
 
     ninja.variable('testincflags', include_flags + test_include_flags + gtest_include_flags)
+    ninja.variable('testlinkflags', '-L{}'.format(str(gtest_lib_path)))
     ninja.rule('compile_static_test', '$cxx -MD -MF $out.d $cxxflags $testincflags -c $in -o $out', depfile='$out.d')
-    ninja.rule('compile_test_exe', '$cxx -MD -MF $out.d $cxxflags $testincflags $in -o $out', depfile='$out.d')
+    ninja.rule('compile_test_exe', '$cxx -MD -MF $out.d $cxxflags $testincflags $testlinkflags -lgtest $in -o $out', depfile='$out.d')
     ninja.newline()
 
     for source in stella_repo.tests:
@@ -300,8 +301,7 @@ if __name__ == '__main__':
 
     test_src_path = test_path / 'src'
     test_compile_inputs = [x.object_name for x in stella_repo.tests] + \
-                          [x.object_name for x in stella_repo.sources] + \
-                          [str(gtest_lib_path)]
+                          [x.object_name for x in stella_repo.sources]
     ninja.build(test_target, 'compile_test_exe', test_compile_inputs)
     if len(stella_repo.tests):
         ninja.default(test_target)
