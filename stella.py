@@ -6,6 +6,8 @@
 # TODO platform-specific flags and suffixes for making shared objects
 # TODO our use of glob might have pathsep problems on windows
 # TODO get compiler flags for each object from its home repository's stella.yaml
+# TODO use a read and validated object instead of passing dep_dict
+# TODO it only makes sense to call check_dependencies after resolve_dependencies
 
 import sys
 import os
@@ -143,18 +145,19 @@ class StellaRepo(object):
         
     def resolve_dependencies(self):
 
+        unresolved_dependencies = [x for x in self.dependencies]
         resolved_dependency_names = [self.project_name]
 
         print(' 🎯 Resolving dependencies to build stella repo {}'.format(self.project_name))
         print('\t 📚 We already have a clone of {} - of course'.format(self.project_name))
         print('\t 📦 {} is a stella repo (of course), already loaded {}'.format(self.project_name, root_path / 'stella.yaml'))
-        for dep_dict in self.dependencies:
+        for dep_dict in unresolved_dependencies:
             print('\t 🧩 Discovered {}\'s dependency {}'.format(self.project_name, dep_dict['name']))
         print('\t 🏁 {} acquired'.format(self.project_name))
 
-        while len(self.dependencies):
+        while len(unresolved_dependencies):
 
-            dep_dict = self.dependencies.pop(0)
+            dep_dict = unresolved_dependencies.pop(0)
             dep_path = deps_path / dep_dict['name']
 
             print(' 🎯 Resolving dependency {}'.format(dep_dict['name']))
@@ -187,8 +190,9 @@ class StellaRepo(object):
             self.sources += dep.sources
 
             for sub_dependency in dep.dependencies:
-                if sub_dependency['name'] not in resolved_dependency_names and sub_dependency not in self.dependencies:
+                if sub_dependency['name'] not in resolved_dependency_names and sub_dependency not in unresolved_dependencies:
                     print('\t 🧩 Discovered {}\'s dependency {}'.format(dep.project_name, sub_dependency['name']))
+                    unresolved_dependencies.append(sub_dependency)
                     self.dependencies.append(sub_dependency)
                 else:
                     print('\t ✅ Already covered {}\'s dependency {}'.format(dep.project_name, sub_dependency['name']))
@@ -197,6 +201,109 @@ class StellaRepo(object):
             resolved_dependency_names.append(dep.project_name)
 
         print()
+
+    def check_dependencies(self):
+
+        print(' 🔍 Checking dependencies for local changes')
+        for dep_dict in self.dependencies:
+            dep_path = deps_path / dep_dict['name']
+            git_repo = git.Repo.init(str(dep_path))
+            if git_repo.is_dirty():
+                print('\t 🚨 Dependency {} has local changes!'.format(dep_dict['name']))
+            else:
+                print('\t 🧼 Dependency {} is clean'.format(dep_dict['name']))        
+
+    def generate_ninja_file(self, config, env):
+
+        build_environment = get_build_environment(env)
+        if not build_environment:
+            print('platform "{}" not known to this script, and no override build environment provided')
+            sys.exit(1)
+
+        compiler_flags = '-std=c++17 -Wall -Wextra -Wno-unused-parameter -Werror -pedantic'
+        if config == 'release':
+            compiler_flags += ' -O3 -flto '
+        elif config == 'debug':
+            compiler_flags += ' -g '
+        include_flags = ['-I{}'.format(x) for x in self.public_header_paths + self.private_header_paths]
+        test_include_flags =  ['-I{}'.format(x) for x in self.test_header_paths]
+        gtest_include_flags = ['-I{}'.format(gtest_inc_path)]
+
+        static_lib_name = str(lib_path / 'lib{}.a'.format(self.project_name))
+        shared_lib_name = str(lib_path / 'lib{}.so'.format(self.project_name))
+
+        ninja = ninja_syntax.Writer(open(root_path / 'build.ninja', 'w'), width=120)
+        ninja.comment('Generated file - do not edit!')
+        ninja.newline()
+
+        ninja.variable('cxx', build_environment['compiler'])
+        ninja.variable('ld', build_environment['linker'])
+        ninja.variable('ar', build_environment['archiver'])
+        ninja.variable('cp', build_environment['copier'])
+        ninja.variable('cxxflags', compiler_flags)
+        ninja.variable('incflags', include_flags)
+        ninja.variable('arflags', '-rcs')
+        ninja.newline()
+
+        ninja.rule('compile_exe', '$cxx -MD -MF $out.d $cxxflags $incflags $in -o $out', depfile='$out.d')
+        ninja.rule('compile_static', '$cxx -MD -MF $out.d $cxxflags $incflags -c $in -o $out', depfile='$out.d')
+        ninja.rule('compile_fpic', '$cxx -MD -MF $out.d $cxxflags $incflags -c -fPIC $in -o $out', depfile='$out.d')
+        ninja.rule('link_static', '$ar $arflags $out $in', depfile='$out.d')
+        ninja.rule('link_shared', '$cxx -MD -MF $out.d $cxxflags $incflags -shared -o $out $in', depfile='$out.d')
+        ninja.rule('copy_file', '$cp $in $out')
+        ninja.newline()
+
+        for source in self.sources:
+            ninja.build(source.object_name, 'compile_static', source.source_name)
+            ninja.build(source.fpic_object_name, 'compile_fpic', source.source_name)
+        ninja.newline()
+
+        ninja.build(static_lib_name, 'link_static', [x.object_name for x in self.sources])
+        ninja.newline()
+        if self.build_static_lib:
+            ninja.default(static_lib_name)
+
+        ninja.build(shared_lib_name, 'link_shared', [x.fpic_object_name for x in self.sources])
+        ninja.newline()
+        if self.build_shared_lib:
+            ninja.default(shared_lib_name)
+
+        for source in self.apps:
+            ninja.build(source.object_name, 'compile_static', source.source_name)
+            ninja.build(source.executable_name, 'compile_exe', [x.object_name for x in self.sources]+[source.object_name])
+            ninja.default(source.executable_name)
+        ninja.newline()
+
+        for public_header_path in self.public_header_paths:
+            for header_file_path in public_header_path.glob('**/*'):
+                header_file_src = str(header_file_path)
+                if len(self.public_header_paths) == 1:
+                    header_file_dst = str(inc_path / header_file_path.relative_to(public_header_path))
+                else:
+                    header_file_dst = str(inc_path / header_file_path.relative_to(self.project_path))
+                ninja.build(header_file_dst, 'copy_file', header_file_src)
+                if self.build_static_lib or self.build_shared_lib:
+                    ninja.default(header_file_dst)
+        ninja.newline()
+
+        ninja.variable('testincflags', include_flags + test_include_flags + gtest_include_flags)
+        ninja.variable('testlinkflags', '-L{}'.format(str(gtest_lib_path)))
+        ninja.rule('compile_static_test', '$cxx -MD -MF $out.d $cxxflags $testincflags -c $in -o $out', depfile='$out.d')
+        ninja.rule('compile_test_exe', '$cxx -MD -MF $out.d $cxxflags $testincflags $testlinkflags -lgtest $in -o $out', depfile='$out.d')
+        ninja.newline()
+
+        for source in self.tests:
+            ninja.build(source.object_name, 'compile_static_test', source.source_name)
+
+        test_src_path = test_path / 'src'
+        test_compile_inputs = [x.object_name for x in self.tests] + \
+                            [x.object_name for x in self.sources]
+        ninja.build(test_target, 'compile_test_exe', test_compile_inputs)
+        if len(self.tests):
+            ninja.default(test_target)
+        ninja.newline()
+
+        ninja.close()
 
 
 if __name__ == '__main__':
@@ -218,93 +325,5 @@ if __name__ == '__main__':
 
     stella_repo = StellaRepo.from_yaml(root_path / 'stella.yaml')
     stella_repo.resolve_dependencies()
-
-    build_environment = get_build_environment(args.env)
-    if not build_environment:
-        print('platform "{}" not known to this script, and no override build environment provided')
-        sys.exit(1)
-
-    compiler_flags = '-std=c++17 -Wall -Wextra -Wno-unused-parameter -Werror -pedantic'
-    if args.config == 'release':
-        compiler_flags += ' -O3 -flto '
-    elif args.config == 'debug':
-        compiler_flags += ' -g '
-    include_flags = ['-I{}'.format(x) for x in stella_repo.public_header_paths + stella_repo.private_header_paths]
-    test_include_flags =  ['-I{}'.format(x) for x in stella_repo.test_header_paths]
-    gtest_include_flags = ['-I{}'.format(gtest_inc_path)]
-
-    static_lib_name = str(lib_path / 'lib{}.a'.format(stella_repo.project_name))
-    shared_lib_name = str(lib_path / 'lib{}.so'.format(stella_repo.project_name))
-
-    ninja = ninja_syntax.Writer(open(root_path / 'build.ninja', 'w'), width=120)
-    ninja.comment('Generated file - do not edit!')
-    ninja.newline()
-
-    ninja.variable('cxx', build_environment['compiler'])
-    ninja.variable('ld', build_environment['linker'])
-    ninja.variable('ar', build_environment['archiver'])
-    ninja.variable('cp', build_environment['copier'])
-    ninja.variable('cxxflags', compiler_flags)
-    ninja.variable('incflags', include_flags)
-    ninja.variable('arflags', '-rcs')
-    ninja.newline()
-
-    ninja.rule('compile_exe', '$cxx -MD -MF $out.d $cxxflags $incflags $in -o $out', depfile='$out.d')
-    ninja.rule('compile_static', '$cxx -MD -MF $out.d $cxxflags $incflags -c $in -o $out', depfile='$out.d')
-    ninja.rule('compile_fpic', '$cxx -MD -MF $out.d $cxxflags $incflags -c -fPIC $in -o $out', depfile='$out.d')
-    ninja.rule('link_static', '$ar $arflags $out $in', depfile='$out.d')
-    ninja.rule('link_shared', '$cxx -MD -MF $out.d $cxxflags $incflags -shared -o $out $in', depfile='$out.d')
-    ninja.rule('copy_file', '$cp $in $out')
-    ninja.newline()
-
-    for source in stella_repo.sources:
-        ninja.build(source.object_name, 'compile_static', source.source_name)
-        ninja.build(source.fpic_object_name, 'compile_fpic', source.source_name)
-    ninja.newline()
-
-    ninja.build(static_lib_name, 'link_static', [x.object_name for x in stella_repo.sources])
-    ninja.newline()
-    if stella_repo.build_static_lib:
-        ninja.default(static_lib_name)
-
-    ninja.build(shared_lib_name, 'link_shared', [x.fpic_object_name for x in stella_repo.sources])
-    ninja.newline()
-    if stella_repo.build_shared_lib:
-        ninja.default(shared_lib_name)
-
-    for app_source in stella_repo.apps:
-        ninja.build(source.object_name, 'compile_static', source.source_name)
-        ninja.build(source.executable_name, 'compile_exe', [x.object_name for x in stella_repo.sources]+[app_obj_name])
-        ninja.default(executable_name)
-    ninja.newline()
-
-    for public_header_path in stella_repo.public_header_paths:
-        for header_file_path in public_header_path.glob('**/*'):
-            header_file_src = str(header_file_path)
-            if len(stella_repo.public_header_paths) == 1:
-                header_file_dst = str(inc_path / header_file_path.relative_to(public_header_path))
-            else:
-                header_file_dst = str(inc_path / header_file_path.relative_to(stella_repo.project_path))
-            ninja.build(header_file_dst, 'copy_file', header_file_src)
-            if stella_repo.build_static_lib or stella_repo.build_shared_lib:
-                ninja.default(header_file_dst)
-    ninja.newline()
-
-    ninja.variable('testincflags', include_flags + test_include_flags + gtest_include_flags)
-    ninja.variable('testlinkflags', '-L{}'.format(str(gtest_lib_path)))
-    ninja.rule('compile_static_test', '$cxx -MD -MF $out.d $cxxflags $testincflags -c $in -o $out', depfile='$out.d')
-    ninja.rule('compile_test_exe', '$cxx -MD -MF $out.d $cxxflags $testincflags $testlinkflags -lgtest $in -o $out', depfile='$out.d')
-    ninja.newline()
-
-    for source in stella_repo.tests:
-        ninja.build(source.object_name, 'compile_static_test', source.source_name)
-
-    test_src_path = test_path / 'src'
-    test_compile_inputs = [x.object_name for x in stella_repo.tests] + \
-                          [x.object_name for x in stella_repo.sources]
-    ninja.build(test_target, 'compile_test_exe', test_compile_inputs)
-    if len(stella_repo.tests):
-        ninja.default(test_target)
-    ninja.newline()
-
-    ninja.close()
+    stella_repo.generate_ninja_file(args.config, args.env)
+    stella_repo.check_dependencies()
