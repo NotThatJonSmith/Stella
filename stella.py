@@ -40,6 +40,7 @@ gtest_inc_path = stella_path / 'googletest' / 'googletest' / 'include'
 gtest_lib_path = stella_path / 'googletest' / 'build' / 'lib'
 test_target = str(bin_path / "run-tests")
 
+
 def get_build_environment(env_override=None):
 
     system_default_build_environments = {
@@ -142,7 +143,7 @@ class StellaRepo(object):
         if 'test-header-paths' in stella_yaml_dict.keys():
             for header_path_string in stella_yaml_dict['test-header-paths']:
                 self.test_header_paths.append(path_from(header_path_string))
-        
+
     def resolve_dependencies(self):
 
         unresolved_dependencies = [x for x in self.dependencies]
@@ -307,11 +308,10 @@ class StellaRepo(object):
 
 
 if __name__ == '__main__':
-    
+
     parser = argparse.ArgumentParser(description='Generate ninja.build')
     parser.add_argument('--config', metavar='CONFIG', type=str, help='The build configuration, either "release" or "debug"')
     parser.add_argument('--env', metavar='ENV_YAML', type=str, help='Override the platform-default build environment YAML blob')
-    parser.add_argument('--method', metavar='METHOD', type=str, help='Override incremental build with "monolithic" or "1TU" builds')
     args = parser.parse_args()
     if not args.config:
         args.config = 'release'
