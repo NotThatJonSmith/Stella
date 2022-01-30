@@ -44,10 +44,10 @@ test_target = str(bin_path / "run-tests")
 def get_build_environment(env_override=None):
 
     system_default_build_environments = {
-        'freebsd': {'compiler': 'g++', 'linker': 'ld', 'archiver': 'ar', 'copier': 'cp'},
-        'linux': {'compiler': 'g++', 'linker': 'ld', 'archiver': 'ar', 'copier': 'cp'},
-        'cygwin': {'compiler': 'g++', 'linker': 'ld', 'archiver': 'ar', 'copier': 'cp'},
-        'darwin': { 'compiler': 'clang++', 'linker': 'ld', 'archiver': 'ar', 'copier': 'cp'},
+        'freebsd': {'compiler': 'g++', 'linker': 'ld', 'archiver': 'ar', 'copier': 'cp', 'cxxflags': ''},
+        'linux': {'compiler': 'g++', 'linker': 'ld', 'archiver': 'ar', 'copier': 'cp', 'cxxflags': '-pthread'},
+        'cygwin': {'compiler': 'g++', 'linker': 'ld', 'archiver': 'ar', 'copier': 'cp', 'cxxflags': ''},
+        'darwin': { 'compiler': 'clang++', 'linker': 'ld', 'archiver': 'ar', 'copier': 'cp', 'cxxflags': ''},
     } # TODO aix, win32
 
     build_environment = None
@@ -221,11 +221,13 @@ class StellaRepo(object):
             print('platform "{}" not known to this script, and no override build environment provided')
             sys.exit(1)
 
-        compiler_flags = '-std=c++17 -Wall -Wextra -Wno-unused-parameter -Werror -pedantic'
+        compiler_flags = '-std=c++17 -Wall -Wextra -Wno-unused-parameter -Werror -pedantic '
         if config == 'release':
-            compiler_flags += ' -O3 -flto '
+            compiler_flags += '-O3 -flto '
         elif config == 'debug':
-            compiler_flags += ' -g '
+            compiler_flags += '-g '
+        compiler_flags += build_environment['cxxflags']
+
         include_flags = ['-I{}'.format(x) for x in self.public_header_paths + self.private_header_paths]
         test_include_flags =  ['-I{}'.format(x) for x in self.test_header_paths]
         gtest_include_flags = ['-I{}'.format(gtest_inc_path)]
