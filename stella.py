@@ -221,7 +221,7 @@ class StellaRepo(object):
             print('platform "{}" not known to this script, and no override build environment provided')
             sys.exit(1)
 
-        compiler_flags = '-std=c++17 -Wall -Wextra -Wno-unused-parameter -Werror -pedantic '
+        compiler_flags = '-std=c++20 -Wall -Wextra -Wno-unused-parameter -Werror -pedantic '
         if config == 'release':
             compiler_flags += '-O3 -flto '
         elif config == 'debug':
